@@ -1,0 +1,1183 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LoRA — Low-Rank Adaptation</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=DM+Mono:wght@300;400;500&family=Bebas+Neue&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --black:#050505; --dark:#0d0d0d; --panel:#111111; --border:#1e1e1e;
+      --muted:#2a2a2a; --dim:#555; --silver:#888; --light:#bbb;
+      --white:#e8e8e8; --gold:#c8a96e; --gold-dim:#7a6040;
+    }
+    html { scroll-behavior: smooth; }
+    body {
+      background: var(--black); color: var(--white);
+      font-family: 'Cormorant Garamond', Georgia, serif;
+      font-size: 18px; line-height: 1.7;
+      overflow-x: hidden; cursor: none;
+    }
+    /* ── Cursor ── */
+    .cursor { position:fixed; top:0; left:0; z-index:9999; pointer-events:none; }
+    .cursor-dot {
+      width:6px; height:6px; background:var(--gold); border-radius:50%;
+      position:absolute; transform:translate(-50%,-50%); transition:transform .1s;
+    }
+    .cursor-ring {
+      width:32px; height:32px; border:1px solid rgba(200,169,110,.4);
+      border-radius:50%; position:absolute; transform:translate(-50%,-50%);
+      transition:transform .15s ease, width .3s, height .3s, border-color .3s;
+    }
+    /* ── Noise ── */
+    body::before {
+      content:''; position:fixed; inset:0; z-index:0;
+      background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='1'/%3E%3C/svg%3E");
+      opacity:.028; pointer-events:none;
+    }
+    /* ── INTRO SPLASH ── */
+    #splash {
+      position:fixed; inset:0; z-index:1000;
+      background:var(--black);
+      display:flex; flex-direction:column; align-items:center; justify-content:center;
+      gap:24px;
+      transition:opacity .8s ease, visibility .8s ease;
+    }
+    #splash.hidden { opacity:0; visibility:hidden; pointer-events:none; }
+    .splash-logo {
+      font-family:'Bebas Neue',sans-serif;
+      font-size:clamp(5rem,18vw,14rem);
+      color:var(--white); line-height:1; letter-spacing:.04em;
+      opacity:0; animation:splashIn 1s .2s forwards;
+    }
+    .splash-logo span { color:var(--gold); }
+    .splash-sub {
+      font-family:'DM Mono',monospace;
+      font-size:.7rem; letter-spacing:.28em; text-transform:uppercase;
+      color:var(--dim);
+      opacity:0; animation:splashIn .8s .7s forwards;
+    }
+    .splash-bar {
+      width:200px; height:1px; background:var(--muted); margin-top:16px; overflow:hidden;
+      opacity:0; animation:splashIn .6s .9s forwards;
+    }
+    .splash-bar-fill {
+      height:100%; width:0; background:var(--gold);
+      animation:splashBarFill 1.4s 1s forwards cubic-bezier(.4,0,.2,1);
+    }
+    @keyframes splashIn { to { opacity:1; } }
+    @keyframes splashBarFill { to { width:100%; } }
+    /* ── Layout ── */
+    .container { max-width:1100px; margin:0 auto; padding:0 40px; position:relative; z-index:1; }
+    /* ── Author bar ── */
+    .author-card {
+      position:fixed; top:0; left:0; right:0; z-index:200;
+      background:rgba(5,5,5,.96); border-bottom:1px solid var(--border);
+      padding:12px 40px; backdrop-filter:blur(20px);
+      transform:translateY(0); transition:transform .5s cubic-bezier(.16,1,.3,1), opacity .5s;
+      animation:slideDown .7s .1s both;
+    }
+    .author-card.hidden { transform:translateY(-100%); opacity:0; pointer-events:none; }
+    @keyframes slideDown { from{transform:translateY(-100%);opacity:0} to{transform:translateY(0);opacity:1} }
+    .author-inner {
+      max-width:1100px; margin:0 auto;
+      display:flex; align-items:center; gap:20px;
+    }
+    .author-avatar {
+      width:36px; height:36px; border-radius:50%;
+      background:linear-gradient(135deg,var(--gold-dim),var(--muted));
+      border:1px solid var(--gold-dim);
+      display:flex; align-items:center; justify-content:center;
+      font-family:'Cormorant Garamond',serif; font-size:1rem; font-weight:600;
+      color:var(--gold); flex-shrink:0;
+    }
+    .author-info { display:flex; flex-direction:column; gap:2px; flex:1; }
+    .author-name { font-family:'Cormorant Garamond',serif; font-size:1rem; font-weight:600; color:var(--white); letter-spacing:.04em; }
+    .author-meta {
+      font-family:'DM Mono',monospace; font-size:.6rem; letter-spacing:.12em;
+      color:var(--silver); display:flex; align-items:center; gap:6px; flex-wrap:wrap;
+    }
+    .author-meta .sep { color:var(--border); }
+    .author-badge {
+      font-family:'DM Mono',monospace; font-size:.58rem; letter-spacing:.16em;
+      text-transform:uppercase; color:var(--gold-dim);
+      border:1px solid var(--gold-dim); padding:4px 12px; white-space:nowrap; opacity:.7;
+    }
+    /* ── NAV ── */
+    nav {
+      position:fixed; top:61px; left:0; right:0; z-index:100;
+      padding:24px 40px;
+      display:flex; align-items:center; justify-content:space-between;
+      border-bottom:1px solid transparent;
+      transition:border-color .4s, background .4s, top .5s;
+    }
+    nav.scrolled { background:rgba(5,5,5,.85); backdrop-filter:blur(20px); border-color:var(--border); }
+    .nav-logo { font-family:'Bebas Neue',sans-serif; font-size:1.6rem; letter-spacing:.12em; color:var(--gold); text-decoration:none; }
+    .nav-links { display:flex; gap:36px; list-style:none; }
+    .nav-links a {
+      font-family:'DM Mono',monospace; font-size:.72rem; letter-spacing:.16em;
+      text-transform:uppercase; color:var(--silver); text-decoration:none; transition:color .25s;
+    }
+    .nav-links a:hover, .nav-links a.active { color:var(--gold); }
+    /* ── SECTION PROGRESS (right side) ── */
+    #progress-nav {
+      position:fixed; right:28px; top:50%; transform:translateY(-50%);
+      z-index:99; display:flex; flex-direction:column; gap:12px;
+      opacity:0; transition:opacity .4s;
+    }
+    #progress-nav.visible { opacity:1; }
+    .pnav-dot {
+      width:6px; height:6px; border-radius:50%;
+      background:var(--muted); border:1px solid var(--dim);
+      cursor:pointer; position:relative;
+      transition:background .3s, transform .3s;
+    }
+    .pnav-dot.active { background:var(--gold); border-color:var(--gold); transform:scale(1.4); }
+    .pnav-dot::after {
+      content:attr(data-label);
+      position:absolute; right:16px; top:50%; transform:translateY(-50%);
+      font-family:'DM Mono',monospace; font-size:.58rem; letter-spacing:.14em;
+      text-transform:uppercase; color:var(--gold);
+      white-space:nowrap; opacity:0; pointer-events:none;
+      transition:opacity .2s;
+    }
+    .pnav-dot:hover::after { opacity:1; }
+    /* ── BACK TO TOP ── */
+    #back-top {
+      position:fixed; bottom:40px; right:28px; z-index:99;
+      width:44px; height:44px;
+      background:var(--panel); border:1px solid var(--border);
+      display:flex; align-items:center; justify-content:center;
+      cursor:pointer; opacity:0; transform:translateY(12px);
+      transition:opacity .4s, transform .4s, border-color .3s, background .3s;
+    }
+    #back-top.visible { opacity:1; transform:translateY(0); }
+    #back-top:hover { background:var(--muted); border-color:var(--gold-dim); }
+    #back-top svg { width:16px; height:16px; stroke:var(--gold); fill:none; stroke-width:2; }
+    /* ── HERO ── */
+    #hero {
+      min-height:100vh; display:flex; align-items:center;
+      padding-top:160px; position:relative; overflow:hidden;
+    }
+    .hero-bg { position:absolute; inset:0; z-index:0; background:radial-gradient(ellipse 70% 60% at 60% 50%, #1a1408 0%, var(--black) 70%); }
+    .hero-grid {
+      position:absolute; inset:0; z-index:0;
+      background-image:linear-gradient(rgba(200,169,110,.04) 1px,transparent 1px),linear-gradient(90deg,rgba(200,169,110,.04) 1px,transparent 1px);
+      background-size:80px 80px;
+      mask-image:radial-gradient(ellipse 80% 70% at 60% 50%, black 30%, transparent 80%);
+    }
+    .hero-inner { position:relative; z-index:1; }
+    .hero-tag {
+      font-family:'DM Mono',monospace; font-size:.7rem; letter-spacing:.22em;
+      text-transform:uppercase; color:var(--gold);
+      display:flex; align-items:center; gap:12px; margin-bottom:32px;
+      opacity:0; animation:fadeUp .8s .2s forwards;
+    }
+    .hero-tag::before { content:''; width:40px; height:1px; background:var(--gold); }
+    .hero-title {
+      font-family:'Bebas Neue',sans-serif;
+      font-size:clamp(5rem,13vw,11rem); line-height:.88; letter-spacing:.02em; color:var(--white);
+      opacity:0; animation:fadeUp .9s .35s forwards;
+    }
+    .hero-title em { font-style:italic; color:var(--gold); display:block; }
+    .hero-subtitle {
+      font-size:1.25rem; font-weight:300; color:var(--light); max-width:560px;
+      margin-top:32px; font-style:italic;
+      opacity:0; animation:fadeUp .9s .5s forwards;
+    }
+    .hero-meta {
+      display:flex; align-items:center; gap:40px; margin-top:56px;
+      opacity:0; animation:fadeUp .9s .65s forwards;
+    }
+    .hero-stat .num { font-family:'Bebas Neue',sans-serif; font-size:2.6rem; color:var(--gold); display:block; line-height:1; }
+    .hero-stat .lbl { font-family:'DM Mono',monospace; font-size:.62rem; letter-spacing:.18em; text-transform:uppercase; color:var(--dim); display:block; margin-top:4px; }
+    .hero-divider { width:1px; height:48px; background:var(--border); }
+    .scroll-hint {
+      position:absolute; bottom:40px; left:50%; transform:translateX(-50%);
+      display:flex; flex-direction:column; align-items:center; gap:8px;
+      font-family:'DM Mono',monospace; font-size:.6rem; letter-spacing:.2em;
+      text-transform:uppercase; color:var(--dim);
+      opacity:0; animation:fadeIn 1s 1.2s forwards;
+    }
+    .scroll-line {
+      width:1px; height:50px;
+      background:linear-gradient(to bottom, var(--gold), transparent);
+      animation:scrollLine 1.8s ease-in-out infinite;
+    }
+    @keyframes scrollLine {
+      0%{transform:scaleY(0);transform-origin:top}
+      50%{transform:scaleY(1);transform-origin:top}
+      50.01%{transform:scaleY(1);transform-origin:bottom}
+      100%{transform:scaleY(0);transform-origin:bottom}
+    }
+    /* ── SECTION COMMON ── */
+    section { padding:120px 0; }
+    .section-label {
+      font-family:'DM Mono',monospace; font-size:.68rem; letter-spacing:.24em;
+      text-transform:uppercase; color:var(--gold-dim);
+      display:flex; align-items:center; gap:14px; margin-bottom:20px;
+    }
+    .section-label::after { content:''; flex:1; max-width:60px; height:1px; background:var(--gold-dim); }
+    h2 { font-family:'Cormorant Garamond',serif; font-size:clamp(2.2rem,5vw,3.6rem); font-weight:300; line-height:1.15; color:var(--white); margin-bottom:16px; }
+    h2 strong { font-weight:600; color:var(--gold); font-style:italic; }
+    .lead { font-size:1.15rem; font-weight:300; color:var(--light); max-width:640px; margin-bottom:64px; }
+    .hr { border:none; border-top:1px solid var(--border); margin:0; }
+    /* ── WHAT ── */
+    #what { background:var(--black); }
+    .two-col { display:grid; grid-template-columns:1fr 1fr; gap:80px; align-items:start; }
+    .two-col p { color:var(--light); margin-bottom:20px; font-weight:300; }
+    .highlight-box { background:var(--panel); border:1px solid var(--border); border-left:3px solid var(--gold); padding:28px 32px; margin-top:32px; }
+    .highlight-box p { font-size:1rem; color:var(--silver); margin:0; font-style:italic; }
+    .challenge-list { list-style:none; margin-top:8px; }
+    .challenge-list li { display:flex; gap:16px; align-items:flex-start; padding:20px 0; border-bottom:1px solid var(--border); color:var(--light); font-weight:300; }
+    .challenge-list li:last-child { border-bottom:none; }
+    .challenge-list .icon { font-family:'DM Mono',monospace; font-size:.7rem; color:var(--gold); min-width:28px; margin-top:4px; letter-spacing:.1em; }
+    /* ── MECHANISM ── */
+    #mechanism { background:var(--dark); }
+    .formula-block { background:var(--panel); border:1px solid var(--border); padding:48px; position:relative; overflow:hidden; margin:48px 0; }
+    .formula-block::before { content:''; position:absolute; top:0; left:0; right:0; height:2px; background:linear-gradient(90deg,var(--gold),transparent); }
+    .formula-block .formula-title { font-family:'DM Mono',monospace; font-size:.65rem; letter-spacing:.2em; text-transform:uppercase; color:var(--gold-dim); margin-bottom:24px; }
+    .formula { font-family:'DM Mono',monospace; font-size:1.5rem; color:var(--white); letter-spacing:.06em; text-align:center; padding:16px 0; }
+    .formula span { color:var(--gold); }
+    .formula-desc { margin-top:24px; font-size:.95rem; color:var(--silver); text-align:center; font-style:italic; }
+    .steps-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:2px; margin-top:48px; }
+    .step-card { background:var(--panel); padding:40px 32px; position:relative; transition:background .3s; }
+    .step-card:hover { background:#161616; }
+    .step-num { font-family:'Bebas Neue',sans-serif; font-size:4.5rem; line-height:1; color:var(--muted); display:block; margin-bottom:16px; transition:color .3s; }
+    .step-card:hover .step-num { color:var(--gold-dim); }
+    .step-title { font-family:'DM Mono',monospace; font-size:.72rem; letter-spacing:.16em; text-transform:uppercase; color:var(--gold); margin-bottom:12px; display:block; }
+    .step-card p { font-size:.95rem; color:var(--silver); font-weight:300; line-height:1.65; }
+    .matrix-section { display:grid; grid-template-columns:1fr 1.2fr; gap:60px; align-items:center; margin-top:80px; }
+    .matrix-viz { position:relative; display:flex; align-items:center; gap:16px; justify-content:center; }
+    .matrix { display:flex; flex-direction:column; gap:3px; position:relative; }
+    .matrix-row { display:flex; gap:3px; }
+    .cell { width:18px; height:18px; border-radius:2px; transition:opacity .6s; }
+    .cell.frozen { background:var(--muted); opacity:.35; }
+    .cell.active { background:var(--gold); opacity:.9; }
+    .cell.low-rank { background:var(--gold); opacity:.6; }
+    .matrix-label { font-family:'DM Mono',monospace; font-size:.62rem; letter-spacing:.14em; text-transform:uppercase; color:var(--dim); text-align:center; margin-top:10px; }
+    .plus-sign, .equals-sign { font-family:'Bebas Neue',sans-serif; font-size:2rem; color:var(--border); align-self:center; }
+    .plus-sign { color:var(--gold-dim); }
+    .matrix-desc { font-size:1rem; color:var(--silver); font-weight:300; line-height:1.75; }
+    .matrix-desc ul { list-style:none; margin-top:20px; }
+    .matrix-desc ul li { padding:10px 0; border-bottom:1px solid var(--border); display:flex; gap:14px; color:var(--light); font-size:.95rem; }
+    .matrix-desc ul li span { color:var(--gold); font-family:'DM Mono',monospace; font-size:.75rem; min-width:44px; }
+    /* ── RESULTS ── */
+    #results { background:var(--black); }
+    .stats-row { display:grid; grid-template-columns:repeat(3,1fr); gap:2px; margin-bottom:2px; }
+    .stat-card { background:var(--panel); padding:52px 40px; position:relative; overflow:hidden; }
+    .stat-card::after { content:''; position:absolute; bottom:0; left:0; right:0; height:1px; background:linear-gradient(90deg,var(--gold-dim),transparent); transform:scaleX(0); transform-origin:left; transition:transform .5s .1s; }
+    .stat-card:hover::after { transform:scaleX(1); }
+    .stat-card .big { font-family:'Bebas Neue',sans-serif; font-size:3.8rem; color:var(--gold); line-height:1; display:block; }
+    .stat-card .unit { font-size:2rem; }
+    .stat-card .desc { font-family:'DM Mono',monospace; font-size:.65rem; letter-spacing:.16em; text-transform:uppercase; color:var(--dim); display:block; margin-top:10px; }
+    .stat-card .note { font-size:.9rem; color:var(--silver); margin-top:14px; font-weight:300; font-style:italic; }
+    .comparison-table { width:100%; border-collapse:collapse; margin-top:64px; }
+    .comparison-table th { font-family:'DM Mono',monospace; font-size:.65rem; letter-spacing:.18em; text-transform:uppercase; color:var(--gold-dim); text-align:left; padding:16px 24px; border-bottom:1px solid var(--border); }
+    .comparison-table td { padding:20px 24px; border-bottom:1px solid var(--border); font-size:.95rem; color:var(--silver); font-weight:300; vertical-align:top; }
+    .comparison-table tr:hover td { background:var(--panel); }
+    .comparison-table .method { color:var(--white); font-weight:400; }
+    .comparison-table .lora-row td { color:var(--light); }
+    .comparison-table .lora-row .method { color:var(--gold); }
+    .badge { display:inline-block; font-family:'DM Mono',monospace; font-size:.6rem; letter-spacing:.12em; text-transform:uppercase; padding:3px 9px; border:1px solid; }
+    .badge.good { border-color:var(--gold-dim); color:var(--gold); }
+    .badge.bad { border-color:#3a2020; color:#7a4040; }
+    /* ── INTERACTIVE CHART ── */
+    #chart-section { background:var(--dark); }
+    .chart-controls { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:40px; }
+    .chart-btn {
+      font-family:'DM Mono',monospace; font-size:.62rem; letter-spacing:.14em;
+      text-transform:uppercase; padding:8px 18px;
+      border:1px solid var(--border); background:transparent; color:var(--dim);
+      cursor:pointer; transition:all .25s;
+    }
+    .chart-btn:hover, .chart-btn.active { border-color:var(--gold); color:var(--gold); background:rgba(200,169,110,.05); }
+    .chart-wrap { background:var(--panel); border:1px solid var(--border); padding:40px; position:relative; }
+    .chart-inner { position:relative; height:300px; }
+    .chart-bars { display:flex; align-items:flex-end; gap:16px; height:260px; padding-bottom:40px; position:relative; }
+    .chart-bar-group { flex:1; display:flex; flex-direction:column; align-items:center; gap:0; position:relative; }
+    .chart-bar {
+      width:100%; position:relative;
+      transition:height .8s cubic-bezier(.16,1,.3,1), background .3s;
+      min-height:2px; cursor:default;
+    }
+    .chart-bar.lora-bar { background:var(--gold); }
+    .chart-bar.other-bar { background:var(--muted); }
+    .chart-bar:hover { filter:brightness(1.3); }
+    .chart-bar .tooltip {
+      position:absolute; bottom:calc(100% + 8px); left:50%; transform:translateX(-50%);
+      background:var(--panel); border:1px solid var(--border);
+      padding:6px 10px; font-family:'DM Mono',monospace; font-size:.6rem;
+      color:var(--white); white-space:nowrap; opacity:0; pointer-events:none;
+      transition:opacity .2s;
+    }
+    .chart-bar:hover .tooltip { opacity:1; }
+    .chart-x-label { font-family:'DM Mono',monospace; font-size:.58rem; letter-spacing:.08em; color:var(--dim); text-align:center; margin-top:8px; position:absolute; bottom:0; width:100%; }
+    .chart-y-lines { position:absolute; inset:0 0 40px 0; pointer-events:none; }
+    .chart-y-line { position:absolute; left:0; right:0; border-top:1px solid var(--border); }
+    .chart-y-line span { font-family:'DM Mono',monospace; font-size:.55rem; color:var(--dim); position:absolute; right:0; top:-10px; }
+    .chart-legend { display:flex; gap:24px; margin-top:24px; flex-wrap:wrap; }
+    .chart-legend-item { display:flex; align-items:center; gap:8px; font-family:'DM Mono',monospace; font-size:.62rem; color:var(--silver); }
+    .legend-dot { width:10px; height:10px; border-radius:1px; }
+    /* ── CODE SECTION ── */
+    #code-section { background:var(--black); }
+    .code-tabs { display:flex; gap:2px; margin-bottom:2px; flex-wrap:wrap; }
+    .code-tab {
+      font-family:'DM Mono',monospace; font-size:.64rem; letter-spacing:.14em;
+      text-transform:uppercase; padding:10px 22px;
+      background:var(--panel); border:1px solid var(--border); border-bottom:none;
+      color:var(--dim); cursor:pointer; transition:all .2s;
+    }
+    .code-tab.active { background:var(--dark); border-color:var(--gold-dim); color:var(--gold); }
+    .code-panel {
+      background:var(--dark); border:1px solid var(--border);
+      padding:40px; display:none; overflow-x:auto;
+      position:relative;
+    }
+    .code-panel.active { display:block; }
+    .code-panel pre { font-family:'DM Mono',monospace; font-size:.82rem; line-height:1.8; color:var(--silver); white-space:pre; }
+    .token-kw  { color:#c792ea; }
+    .token-fn  { color:#82aaff; }
+    .token-str { color:#c3e88d; }
+    .token-cm  { color:#546e7a; font-style:italic; }
+    .token-num { color:var(--gold); }
+    .token-cl  { color:#ffcb6b; }
+    .copy-btn {
+      position:absolute; top:16px; right:16px;
+      font-family:'DM Mono',monospace; font-size:.58rem; letter-spacing:.14em;
+      text-transform:uppercase; padding:6px 14px;
+      background:transparent; border:1px solid var(--border); color:var(--dim);
+      cursor:pointer; transition:all .2s;
+    }
+    .copy-btn:hover { border-color:var(--gold-dim); color:var(--gold); }
+    /* ── TIMELINE ── */
+    #timeline-section { background:var(--dark); }
+    .timeline { position:relative; padding-left:40px; }
+    .timeline::before { content:''; position:absolute; left:0; top:8px; bottom:8px; width:1px; background:linear-gradient(to bottom, var(--gold), var(--gold-dim), var(--border)); }
+    .tl-item { position:relative; padding-bottom:56px; }
+    .tl-item:last-child { padding-bottom:0; }
+    .tl-dot {
+      position:absolute; left:-47px; top:6px;
+      width:14px; height:14px; border-radius:50%;
+      background:var(--black); border:2px solid var(--gold-dim);
+      transition:border-color .3s, background .3s;
+    }
+    .tl-item:hover .tl-dot { border-color:var(--gold); background:var(--gold); }
+    .tl-year { font-family:'Bebas Neue',sans-serif; font-size:1.1rem; color:var(--gold); letter-spacing:.1em; display:block; margin-bottom:4px; }
+    .tl-title { font-size:1.15rem; font-weight:400; color:var(--white); margin-bottom:8px; }
+    .tl-desc { font-size:.9rem; color:var(--silver); font-weight:300; line-height:1.7; max-width:600px; }
+    .tl-tag {
+      display:inline-block; margin-top:10px;
+      font-family:'DM Mono',monospace; font-size:.58rem; letter-spacing:.14em;
+      text-transform:uppercase; padding:3px 10px;
+      border:1px solid var(--gold-dim); color:var(--gold-dim);
+    }
+    /* ── INSIGHTS ── */
+    #insights { background:var(--black); }
+    .insight-grid { display:grid; grid-template-columns:1fr 1fr; gap:2px; margin-top:64px; }
+    .insight-card { background:var(--panel); padding:48px 44px; position:relative; overflow:hidden; }
+    .insight-card::before { content:attr(data-num); position:absolute; top:-10px; right:24px; font-family:'Bebas Neue',sans-serif; font-size:7rem; color:rgba(255,255,255,.02); line-height:1; pointer-events:none; }
+    .insight-card h3 { font-size:1.4rem; font-weight:400; color:var(--white); margin-bottom:16px; }
+    .insight-card h3 em { color:var(--gold); font-style:italic; }
+    .insight-card p { font-size:.95rem; color:var(--silver); font-weight:300; line-height:1.7; }
+    .rank-bar-wrap { margin-top:28px; }
+    .rank-bar-wrap .rank-label { display:flex; justify-content:space-between; font-family:'DM Mono',monospace; font-size:.65rem; letter-spacing:.14em; text-transform:uppercase; color:var(--dim); margin-bottom:8px; }
+    .rank-bar { height:3px; background:var(--muted); position:relative; }
+    .rank-bar-fill { position:absolute; left:0; top:0; bottom:0; background:var(--gold); transition:width 1.4s cubic-bezier(.16,1,.3,1); }
+    /* ── APPLICATIONS ── */
+    #applications { background:var(--dark); }
+    .app-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:2px; margin-top:48px; }
+    .app-card { background:var(--panel); padding:36px 28px; border-top:2px solid var(--border); transition:border-color .3s, background .3s; cursor:default; }
+    .app-card:hover { border-color:var(--gold); background:#131313; }
+    .app-icon { font-size:1.6rem; display:block; margin-bottom:20px; filter:grayscale(1) brightness(.8); transition:filter .3s; }
+    .app-card:hover .app-icon { filter:none; }
+    .app-card h3 { font-size:1.05rem; font-weight:400; color:var(--white); margin-bottom:10px; }
+    .app-card p { font-size:.85rem; color:var(--dim); font-weight:300; line-height:1.6; }
+    /* ── REFERENCES ── */
+    #references { background:var(--black); }
+    .ref-grid { display:grid; grid-template-columns:1fr 1fr; gap:2px; margin-top:48px; }
+    .ref-card {
+      background:var(--panel); border:1px solid var(--border);
+      padding:28px 32px; display:flex; gap:20px; align-items:flex-start;
+      text-decoration:none; transition:border-color .3s, background .3s;
+      position:relative; overflow:hidden;
+    }
+    .ref-card::after { content:'↗'; position:absolute; top:20px; right:20px; font-size:.8rem; color:var(--gold-dim); opacity:0; transition:opacity .3s; }
+    .ref-card:hover { border-color:var(--gold-dim); background:#0e0e0e; }
+    .ref-card:hover::after { opacity:1; }
+    .ref-num { font-family:'Bebas Neue',sans-serif; font-size:1.8rem; color:var(--muted); line-height:1; flex-shrink:0; }
+    .ref-body {}
+    .ref-title { font-size:.95rem; color:var(--white); font-weight:400; margin-bottom:4px; }
+    .ref-authors { font-family:'DM Mono',monospace; font-size:.6rem; letter-spacing:.1em; color:var(--dim); margin-bottom:6px; }
+    .ref-venue { font-family:'DM Mono',monospace; font-size:.6rem; letter-spacing:.12em; color:var(--gold-dim); text-transform:uppercase; }
+    /* ── FOOTER ── */
+    footer { padding:80px 0 48px; border-top:1px solid var(--border); background:var(--black); }
+    .footer-inner { display:flex; justify-content:space-between; align-items:flex-end; }
+    .footer-logo { font-family:'Bebas Neue',sans-serif; font-size:2.2rem; letter-spacing:.1em; color:var(--muted); }
+    .footer-logo em { color:var(--gold-dim); font-style:normal; }
+    .footer-copy { font-family:'DM Mono',monospace; font-size:.62rem; letter-spacing:.14em; text-transform:uppercase; color:var(--muted); text-align:right; }
+    .footer-copy a { color:var(--gold-dim); text-decoration:none; }
+    .footer-copy a:hover { color:var(--gold); }
+    /* ── ANIMATIONS ── */
+    @keyframes fadeUp { from{opacity:0;transform:translateY(30px)} to{opacity:1;transform:translateY(0)} }
+    @keyframes fadeIn { from{opacity:0} to{opacity:1} }
+    .reveal { opacity:0; transform:translateY(24px); transition:opacity .8s cubic-bezier(.16,1,.3,1), transform .8s cubic-bezier(.16,1,.3,1); }
+    .reveal.visible { opacity:1; transform:translateY(0); }
+    .reveal-delay-1 { transition-delay:.1s; }
+    .reveal-delay-2 { transition-delay:.2s; }
+    .reveal-delay-3 { transition-delay:.3s; }
+    .reveal-delay-4 { transition-delay:.4s; }
+    /* ── Scrollbar ── */
+    ::-webkit-scrollbar { width:4px; }
+    ::-webkit-scrollbar-track { background:var(--black); }
+    ::-webkit-scrollbar-thumb { background:var(--muted); }
+    ::-webkit-scrollbar-thumb:hover { background:var(--gold-dim); }
+    /* ── Responsive ── */
+    @media(max-width:900px) {
+      .two-col,.matrix-section,.insight-grid,.ref-grid { grid-template-columns:1fr; }
+      .steps-grid,.stats-row { grid-template-columns:1fr; }
+      .app-grid { grid-template-columns:1fr 1fr; }
+      .container { padding:0 24px; }
+      nav { padding:20px 24px; }
+      .nav-links { display:none; }
+      .footer-inner { flex-direction:column; gap:24px; align-items:flex-start; }
+      .footer-copy { text-align:left; }
+      #progress-nav { display:none; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ── SPLASH ── -->
+<div id="splash">
+  <div class="splash-logo">Lo<span>RA</span></div>
+  <div class="splash-sub">Low-Rank Adaptation of Large Language Models</div>
+  <div class="splash-bar"><div class="splash-bar-fill"></div></div>
+</div>
+
+<!-- ── Cursor ── -->
+<div class="cursor" id="cursor">
+  <div class="cursor-dot" id="cursorDot"></div>
+  <div class="cursor-ring" id="cursorRing"></div>
+</div>
+
+<!-- ── SECTION PROGRESS ── -->
+<div id="progress-nav">
+  <div class="pnav-dot" data-target="hero"         data-label="頂部"></div>
+  <div class="pnav-dot" data-target="what"         data-label="介紹"></div>
+  <div class="pnav-dot" data-target="mechanism"    data-label="機制"></div>
+  <div class="pnav-dot" data-target="results"      data-label="成果"></div>
+  <div class="pnav-dot" data-target="chart-section" data-label="比較圖表"></div>
+  <div class="pnav-dot" data-target="code-section" data-label="程式碼"></div>
+  <div class="pnav-dot" data-target="timeline-section" data-label="時間軸"></div>
+  <div class="pnav-dot" data-target="insights"     data-label="洞見"></div>
+  <div class="pnav-dot" data-target="applications" data-label="應用"></div>
+  <div class="pnav-dot" data-target="references"   data-label="參考文獻"></div>
+</div>
+
+<!-- ── BACK TO TOP ── -->
+<div id="back-top" title="回到頂部">
+  <svg viewBox="0 0 24 24"><polyline points="18 15 12 9 6 15"/></svg>
+</div>
+
+<!-- ── AUTHOR BAR ── -->
+<div class="author-card" id="authorCard">
+  <div class="author-inner">
+    <div class="author-avatar">王</div>
+    <div class="author-info">
+      <span class="author-name">王暄菡</span>
+      <span class="author-meta">
+        <span>國立台北教育大學</span><span class="sep">·</span>
+        <span>資訊科學系 資二甲</span><span class="sep">·</span>
+        <span>111316034</span>
+      </span>
+    </div>
+    <div class="author-badge">深度學習演算法學習成果報告</div>
+  </div>
+</div>
+
+<!-- ── NAV ── -->
+<nav id="nav">
+  <a href="#hero" class="nav-logo">LoRA</a>
+  <ul class="nav-links">
+    <li><a href="#what">介紹</a></li>
+    <li><a href="#mechanism">機制</a></li>
+    <li><a href="#results">成果</a></li>
+    <li><a href="#chart-section">圖表</a></li>
+    <li><a href="#code-section">程式碼</a></li>
+    <li><a href="#timeline-section">時間軸</a></li>
+    <li><a href="#insights">洞見</a></li>
+    <li><a href="#references">文獻</a></li>
+  </ul>
+</nav>
+
+<!-- ══════════════════════════════ HERO ══════════════════════════════ -->
+<section id="hero">
+  <div class="hero-bg"></div>
+  <div class="hero-grid" id="heroGrid"></div>
+  <div class="container">
+    <div class="hero-inner">
+      <div class="hero-tag">Microsoft Research · 2021 · ICLR 2022</div>
+      <h1 class="hero-title">Low-Rank<br><em>Adaptation</em></h1>
+      <p class="hero-subtitle">以極少量的參數，完成大型語言模型的精準微調——一種優雅的數學洞見，重塑了 AI 工業界的部署標準。</p>
+      <div class="hero-meta">
+        <div class="hero-stat">
+          <span class="num">10,000<span style="font-size:1.4rem">×</span></span>
+          <span class="lbl">訓練參數減少</span>
+        </div>
+        <div class="hero-divider"></div>
+        <div class="hero-stat">
+          <span class="num">3<span style="font-size:1.4rem">×</span></span>
+          <span class="lbl">GPU 需求降低</span>
+        </div>
+        <div class="hero-divider"></div>
+        <div class="hero-stat">
+          <span class="num">0</span>
+          <span class="lbl">推論延遲增加</span>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="scroll-hint"><span>Scroll</span><div class="scroll-line"></div></div>
+</section>
+<hr class="hr"/>
+
+<!-- ══════════════════════════════ WHAT ══════════════════════════════ -->
+<section id="what">
+  <div class="container">
+    <div class="two-col">
+      <div class="reveal">
+        <div class="section-label">01 — 演算法介紹</div>
+        <h2>什麼是<br><strong>LoRA？</strong></h2>
+        <p>LoRA（低秩適應）是由 Microsoft Research 提出的「參數高效微調（PEFT）」技術，專為大型語言模型如 GPT-3 與 Stable Diffusion 等基礎模型設計。</p>
+        <p>其核心思想源自一個優雅的數學假設：大型預訓練模型在適應新任務時，所需的權重變化量存在於一個極低維度的子空間中。</p>
+        <div class="highlight-box">
+          <p>「過度參數化的模型在適應特定任務時，其權重更新矩陣具有『低內在秩（Low Intrinsic Rank）』的特性。」</p>
+        </div>
+      </div>
+      <div class="reveal reveal-delay-2">
+        <div class="section-label">02 — 問題背景</div>
+        <h2>它解決了<br><strong>什麼難題？</strong></h2>
+        <ul class="challenge-list">
+          <li><span class="icon">01</span><div><strong style="color:var(--white);font-weight:400">儲存成本過高</strong><br>全量微調為每個下游任務產生一份與原模型同等大小的權重，難以在生產環境中部署。</div></li>
+          <li><span class="icon">02</span><div><strong style="color:var(--white);font-weight:400">Adapter 的推論延遲</strong><br>Adapter 以串聯方式插入額外網路層，在小批次線上推論場景下造成 20–30% 以上的延遲。</div></li>
+          <li><span class="icon">03</span><div><strong style="color:var(--white);font-weight:400">Prefix-tuning 的限制</strong><br>在輸入端加入前綴提示字元，壓縮模型可處理的有效序列長度，且效能不夠穩定。</div></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+<hr class="hr"/>
+
+<!-- ══════════════════════════════ MECHANISM ══════════════════════════════ -->
+<section id="mechanism">
+  <div class="container">
+    <div class="reveal">
+      <div class="section-label">03 — 核心機制</div>
+      <h2>數學上的<br><strong>精妙設計</strong></h2>
+      <p class="lead">LoRA 不改動原有的預訓練權重，而是在旁路引入兩個極小的矩陣，以最低成本實現任務適應。</p>
+    </div>
+    <div class="formula-block reveal">
+      <div class="formula-title">Forward Pass 前向傳播計算公式</div>
+      <div class="formula">h &nbsp;=&nbsp; <span>W₀</span>x &nbsp;+&nbsp; <span>ΔW</span>x &nbsp;=&nbsp; <span>W₀</span>x &nbsp;+&nbsp; <span>BA</span>x</div>
+      <div class="formula-desc">原始預訓練權重 W₀ 保持凍結，僅訓練低秩分解矩陣 B 與 A</div>
+    </div>
+    <div class="matrix-section reveal">
+      <div class="matrix-viz">
+        <div><div class="matrix" id="matW0"></div><div class="matrix-label">W₀（凍結）</div></div>
+        <span class="plus-sign">+</span>
+        <div><div class="matrix" id="matB"></div><div class="matrix-label">B（d × r）</div></div>
+        <div><div class="matrix" id="matA"></div><div class="matrix-label">A（r × k）</div></div>
+        <span class="equals-sign">=</span>
+        <div><div class="matrix" id="matResult"></div><div class="matrix-label">ΔW = BA</div></div>
+      </div>
+      <div class="matrix-desc">
+        <p>若原矩陣維度為 <strong style="color:var(--white)">d × k</strong>，LoRA 引入：</p>
+        <ul>
+          <li><span>A ∈ ℝʳˣᵏ</span>以隨機高斯分佈初始化</li>
+          <li><span>B ∈ ℝᵈˣʳ</span>初始化為全零，確保訓練起始時 ΔW = 0</li>
+          <li><span>r ≪ d,k</span>秩 r 可低至 1 或 2，遠小於原始維度</li>
+        </ul>
+        <p style="margin-top:20px;font-size:.9rem;font-style:italic;color:var(--dim)">推論時直接合併 W₀ + BA，無任何額外計算層。</p>
+      </div>
+    </div>
+    <div class="steps-grid reveal">
+      <div class="step-card"><span class="step-num">01</span><span class="step-title">凍結原權重</span><p>預訓練模型的所有權重矩陣 W₀ 在訓練過程中完全凍結，不計算梯度，無需消耗對應記憶體。</p></div>
+      <div class="step-card"><span class="step-num">02</span><span class="step-title">旁路低秩矩陣</span><p>在凍結層旁並聯引入 B、A 兩個低秩矩陣。其乘積 ΔW = BA 代表針對當前任務的「增量知識」。</p></div>
+      <div class="step-card"><span class="step-num">03</span><span class="step-title">合併推論</span><p>訓練完成後，將 BA 直接加入原權重 W₀，得到 W = W₀ + BA，部署時推論延遲為零。</p></div>
+    </div>
+  </div>
+</section>
+<hr class="hr"/>
+
+<!-- ══════════════════════════════ RESULTS ══════════════════════════════ -->
+<section id="results">
+  <div class="container">
+    <div class="reveal">
+      <div class="section-label">04 — 實驗成果</div>
+      <h2>數字說話，<br><strong>成效驚人</strong></h2>
+    </div>
+    <div class="stats-row reveal">
+      <div class="stat-card"><span class="big">10,000<span class="unit">×</span></span><span class="desc">可訓練參數減少</span><p class="note">GPT-3 175B：全量微調需 1750 億參數，LoRA 僅需約 1750 萬。</p></div>
+      <div class="stat-card"><span class="big">3<span class="unit">×</span></span><span class="desc">GPU 記憶體需求降低</span><p class="note">因無需儲存大量梯度與優化器狀態，VRAM 消耗大幅下降。</p></div>
+      <div class="stat-card"><span class="big">0<span class="unit">ms</span></span><span class="desc">額外推論延遲</span><p class="note">部署後直接合併權重，在架構上與原模型完全相同。</p></div>
+    </div>
+    <div class="reveal" style="margin-top:2px">
+      <div class="stat-card">
+        <p style="font-size:1rem;color:var(--silver);font-weight:300;line-height:1.8">在 RoBERTa Large（3.55 億參數）上，LoRA 僅訓練 <strong style="color:var(--gold)">0.8M 個參數（不足 1%）</strong>，在 GLUE 各項任務上的平均表現不僅超越了其他 PEFT 方法，甚至稍微贏過了全量微調。DeBERTa XXL（15 億參數）的實驗中，LoRA 以 4.7M 參數達到全量微調等級：平均分數 <strong style="color:var(--gold)">91.3 vs 91.1</strong>。</p>
+      </div>
+    </div>
+    <table class="comparison-table reveal">
+      <thead><tr><th>方法</th><th>核心機制</th><th>推論延遲</th><th>效能穩定性</th><th>序列長度影響</th></tr></thead>
+      <tbody>
+        <tr><td class="method">BitFit</td><td>只訓練 Bias 偏差值</td><td><span class="badge good">無</span></td><td><span class="badge bad">有限</span></td><td>無影響</td></tr>
+        <tr><td class="method">Adapter</td><td>串聯額外網路層</td><td><span class="badge bad">+20~30%</span></td><td><span class="badge good">良好</span></td><td>無影響</td></tr>
+        <tr><td class="method">Prefix-tuning</td><td>加入可訓練前綴 Token</td><td><span class="badge good">無</span></td><td><span class="badge bad">不穩定</span></td><td>壓縮有效長度</td></tr>
+        <tr class="lora-row"><td class="method">LoRA ✦</td><td>旁路低秩矩陣，推論合併</td><td><span class="badge good">零延遲</span></td><td><span class="badge good">優異</span></td><td>無影響</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+<hr class="hr"/>
+
+<!-- ══════════════════════════════ CHART ══════════════════════════════ -->
+<section id="chart-section">
+  <div class="container">
+    <div class="reveal">
+      <div class="section-label">05 — 互動比較圖表</div>
+      <h2>各方法<br><strong>效能對決</strong></h2>
+      <p class="lead">點選不同基準任務，查看 LoRA 與各微調方法在 GLUE 系列任務上的分數比較。</p>
+    </div>
+    <div class="reveal">
+      <div class="chart-controls" id="chartControls">
+        <button class="chart-btn active" data-chart="sst2">SST-2</button>
+        <button class="chart-btn" data-chart="mnli">MNLI</button>
+        <button class="chart-btn" data-chart="qnli">QNLI</button>
+        <button class="chart-btn" data-chart="qqp">QQP</button>
+        <button class="chart-btn" data-chart="mrpc">MRPC</button>
+      </div>
+      <div class="chart-wrap">
+        <div class="chart-inner">
+          <div class="chart-y-lines" id="chartYLines"></div>
+          <div class="chart-bars" id="chartBars"></div>
+        </div>
+        <div class="chart-legend">
+          <div class="chart-legend-item"><div class="legend-dot" style="background:var(--gold)"></div>LoRA</div>
+          <div class="chart-legend-item"><div class="legend-dot" style="background:var(--muted)"></div>其他方法</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+<hr class="hr"/>
+
+<!-- ══════════════════════════════ CODE ══════════════════════════════ -->
+<section id="code-section">
+  <div class="container">
+    <div class="reveal">
+      <div class="section-label">06 — 程式碼展示</div>
+      <h2>從理論到<br><strong>實作</strong></h2>
+      <p class="lead">LoRA 的核心邏輯不到 40 行 Python 即可實現。以下展示三種場景的偽代碼與實作參考。</p>
+    </div>
+    <div class="reveal">
+      <div class="code-tabs">
+        <button class="code-tab active" data-tab="core">核心實作</button>
+        <button class="code-tab" data-tab="train">訓練流程</button>
+        <button class="code-tab" data-tab="hf">HuggingFace</button>
+      </div>
+      <div class="code-panel active" id="tab-core">
+        <button class="copy-btn" onclick="copyCode('tab-core')">Copy</button>
+        <pre><span class="token-kw">import</span> torch
+<span class="token-kw">import</span> torch.nn <span class="token-kw">as</span> nn
+
+<span class="token-kw">class</span> <span class="token-cl">LoRALayer</span>(nn.Module):
+    <span class="token-cm">"""單一 LoRA 旁路模組 (ΔW = B @ A)"""</span>
+    <span class="token-kw">def</span> <span class="token-fn">__init__</span>(self, in_dim, out_dim, rank=<span class="token-num">4</span>, alpha=<span class="token-num">1.0</span>):
+        <span class="token-fn">super</span>().__init__()
+        self.rank  = rank
+        self.scale = alpha / rank          <span class="token-cm"># 縮放係數</span>
+
+        <span class="token-cm"># A: 隨機高斯初始化；B: 全零初始化</span>
+        self.A = nn.Parameter(torch.randn(rank, in_dim) * <span class="token-num">0.01</span>)
+        self.B = nn.Parameter(torch.zeros(out_dim, rank))
+
+    <span class="token-kw">def</span> <span class="token-fn">forward</span>(self, x):
+        <span class="token-cm"># ΔWx = (B @ A)x，乘上縮放係數</span>
+        <span class="token-kw">return</span> (x @ self.A.T @ self.B.T) * self.scale
+
+
+<span class="token-kw">class</span> <span class="token-cl">LoRALinear</span>(nn.Module):
+    <span class="token-cm">"""將原 Linear 層包裹為 LoRA 版本"""</span>
+    <span class="token-kw">def</span> <span class="token-fn">__init__</span>(self, linear: nn.Linear, rank=<span class="token-num">4</span>):
+        <span class="token-fn">super</span>().__init__()
+        self.linear = linear
+        self.lora   = <span class="token-cl">LoRALayer</span>(linear.in_features,
+                                  linear.out_features, rank)
+        <span class="token-cm"># 凍結原始權重</span>
+        <span class="token-kw">for</span> p <span class="token-kw">in</span> self.linear.parameters():
+            p.requires_grad = <span class="token-kw">False</span>
+
+    <span class="token-kw">def</span> <span class="token-fn">forward</span>(self, x):
+        <span class="token-cm"># h = W₀x + ΔWx</span>
+        <span class="token-kw">return</span> self.linear(x) + self.lora(x)
+
+    <span class="token-kw">def</span> <span class="token-fn">merge_weights</span>(self):
+        <span class="token-cm">"""推論前合併，消除額外計算"""</span>
+        delta_W = (self.lora.B @ self.lora.A) * self.lora.scale
+        self.linear.weight.data += delta_W</pre>
+      </div>
+      <div class="code-panel" id="tab-train">
+        <button class="copy-btn" onclick="copyCode('tab-train')">Copy</button>
+        <pre><span class="token-cm"># ── 訓練流程：僅更新 LoRA 參數 ──</span>
+
+<span class="token-kw">def</span> <span class="token-fn">apply_lora_to_model</span>(model, rank=<span class="token-num">4</span>, target_modules=(<span class="token-str">"q_proj"</span>, <span class="token-str">"v_proj"</span>)):
+    <span class="token-cm">"""將指定 Attention 矩陣替換為 LoRA 版本"""</span>
+    <span class="token-kw">for</span> name, module <span class="token-kw">in</span> model.named_modules():
+        <span class="token-kw">if</span> <span class="token-fn">any</span>(t <span class="token-kw">in</span> name <span class="token-kw">for</span> t <span class="token-kw">in</span> target_modules):
+            parent, child_name = <span class="token-fn">get_parent</span>(model, name)
+            original = <span class="token-fn">getattr</span>(parent, child_name)
+            <span class="token-fn">setattr</span>(parent, child_name, <span class="token-cl">LoRALinear</span>(original, rank=rank))
+    <span class="token-kw">return</span> model
+
+
+<span class="token-cm"># 套用 LoRA</span>
+model = <span class="token-fn">apply_lora_to_model</span>(pretrained_model, rank=<span class="token-num">4</span>)
+
+<span class="token-cm"># 只優化 LoRA 參數（A, B 矩陣）</span>
+lora_params = [p <span class="token-kw">for</span> n, p <span class="token-kw">in</span> model.named_parameters()
+               <span class="token-kw">if</span> <span class="token-str">"lora"</span> <span class="token-kw">in</span> n <span class="token-kw">and</span> p.requires_grad]
+
+optimizer = torch.optim.<span class="token-cl">AdamW</span>(lora_params, lr=<span class="token-num">3e-4</span>)
+
+<span class="token-cm"># 訓練迴圈</span>
+<span class="token-kw">for</span> epoch <span class="token-kw">in</span> <span class="token-fn">range</span>(num_epochs):
+    <span class="token-kw">for</span> batch <span class="token-kw">in</span> dataloader:
+        loss = model(**batch).loss
+        loss.<span class="token-fn">backward</span>()       <span class="token-cm"># 只有 LoRA 參數有梯度</span>
+        optimizer.<span class="token-fn">step</span>()
+        optimizer.<span class="token-fn">zero_grad</span>()
+
+<span class="token-cm"># 訓練完成：合併權重，準備零延遲部署</span>
+<span class="token-kw">for</span> module <span class="token-kw">in</span> model.modules():
+    <span class="token-kw">if</span> <span class="token-fn">isinstance</span>(module, <span class="token-cl">LoRALinear</span>):
+        module.<span class="token-fn">merge_weights</span>()</pre>
+      </div>
+      <div class="code-panel" id="tab-hf">
+        <button class="copy-btn" onclick="copyCode('tab-hf')">Copy</button>
+        <pre><span class="token-cm"># ── 使用 HuggingFace PEFT 套件（推薦生產方式）──</span>
+<span class="token-kw">from</span> transformers <span class="token-kw">import</span> AutoModelForCausalLM, AutoTokenizer
+<span class="token-kw">from</span> peft <span class="token-kw">import</span> get_peft_model, LoraConfig, TaskType
+
+<span class="token-cm"># 1. 載入基礎模型</span>
+model = AutoModelForCausalLM.<span class="token-fn">from_pretrained</span>(
+    <span class="token-str">"meta-llama/Llama-2-7b-hf"</span>,
+    torch_dtype=torch.float16,
+    device_map=<span class="token-str">"auto"</span>
+)
+
+<span class="token-cm"># 2. 設定 LoRA 配置</span>
+config = <span class="token-cl">LoraConfig</span>(
+    task_type = TaskType.CAUSAL_LM,
+    r             = <span class="token-num">8</span>,        <span class="token-cm"># 秩 r</span>
+    lora_alpha    = <span class="token-num">32</span>,       <span class="token-cm"># 縮放係數 α</span>
+    lora_dropout  = <span class="token-num">0.1</span>,
+    target_modules= [<span class="token-str">"q_proj"</span>, <span class="token-str">"v_proj"</span>,
+                     <span class="token-str">"k_proj"</span>, <span class="token-str">"o_proj"</span>]
+)
+
+<span class="token-cm"># 3. 套用 LoRA（自動凍結原始權重）</span>
+model = <span class="token-fn">get_peft_model</span>(model, config)
+model.<span class="token-fn">print_trainable_parameters</span>()
+<span class="token-cm"># trainable params: 4,194,304 || all params: 6,742,609,920</span>
+<span class="token-cm"># trainable%: 0.0622%</span>
+
+<span class="token-cm"># 4. 正常訓練，保存僅含 LoRA 權重（~16MB）</span>
+trainer.<span class="token-fn">train</span>()
+model.<span class="token-fn">save_pretrained</span>(<span class="token-str">"./lora-llama2-finetuned"</span>)</pre>
+      </div>
+    </div>
+  </div>
+</section>
+<hr class="hr"/>
+
+<!-- ══════════════════════════════ TIMELINE ══════════════════════════════ -->
+<section id="timeline-section">
+  <div class="container">
+    <div class="reveal">
+      <div class="section-label">07 — 發展時間軸</div>
+      <h2>LoRA 的<br><strong>誕生與影響</strong></h2>
+      <p class="lead">從一篇 arXiv 預印本，到成為業界標準——LoRA 如何在短短數年內重塑了整個 AI 微調生態系。</p>
+    </div>
+    <div class="timeline reveal">
+      <div class="tl-item">
+        <div class="tl-dot"></div>
+        <span class="tl-year">2017</span>
+        <div class="tl-title">Transformer 架構誕生</div>
+        <p class="tl-desc">Vaswani et al. 發表《Attention Is All You Need》，奠定現代大型語言模型的基礎架構，也埋下了日後 LoRA 需要解決的微調成本問題的種子。</p>
+        <span class="tl-tag">基礎架構</span>
+      </div>
+      <div class="tl-item">
+        <div class="tl-dot"></div>
+        <span class="tl-year">2020</span>
+        <div class="tl-title">GPT-3 發布，微調成本危機浮現</div>
+        <p class="tl-desc">OpenAI 發布擁有 1750 億參數的 GPT-3。全量微調一次的成本高達數百萬美元，且每個任務都需儲存完整副本——業界迫切需要更有效率的微調方法。</p>
+        <span class="tl-tag">規模化挑戰</span>
+      </div>
+      <div class="tl-item">
+        <div class="tl-dot"></div>
+        <span class="tl-year">2021.06</span>
+        <div class="tl-title">LoRA 論文在 arXiv 發布（v1）</div>
+        <p class="tl-desc">Hu et al. 來自 Microsoft Research 發表 arXiv:2106.09685。核心創新：以兩個低秩矩陣 B、A 的乘積代替全量權重更新，訓練參數減少 10,000 倍。</p>
+        <span class="tl-tag">重要論文</span>
+      </div>
+      <div class="tl-item">
+        <div class="tl-dot"></div>
+        <span class="tl-year">2022.01</span>
+        <div class="tl-title">ICLR 2022 正式接收</div>
+        <p class="tl-desc">論文在第十屆國際學習表徵大會（ICLR 2022）正式發表，引發學術界廣泛關注，迅速成為 PEFT 領域引用最高的論文之一。</p>
+        <span class="tl-tag">學術認可</span>
+      </div>
+      <div class="tl-item">
+        <div class="tl-dot"></div>
+        <span class="tl-year">2022—2023</span>
+        <div class="tl-title">Stable Diffusion LoRA 爆發式普及</div>
+        <p class="tl-desc">圖像生成社群將 LoRA 應用於 Stable Diffusion，使得任何人都能以數十張圖片、在消費級 GPU 上訓練出特定風格或角色的生成模型，掀起 AI 藝術創作革命。</p>
+        <span class="tl-tag">大眾化應用</span>
+      </div>
+      <div class="tl-item">
+        <div class="tl-dot"></div>
+        <span class="tl-year">2023</span>
+        <div class="tl-title">LLaMA + LoRA：開源微調生態系成形</div>
+        <p class="tl-desc">Meta 發布 LLaMA 系列開源模型，搭配 HuggingFace PEFT 套件與 LoRA，使得在單張消費級 GPU 上微調 70 億參數模型成為可能。Alpaca、Vicuna 等社群微調模型相繼誕生。</p>
+        <span class="tl-tag">開源生態</span>
+      </div>
+      <div class="tl-item">
+        <div class="tl-dot"></div>
+        <span class="tl-year">2023—今</span>
+        <div class="tl-title">LoRA 衍生方法持續演進</div>
+        <p class="tl-desc">QLoRA（4-bit 量化 + LoRA）進一步降低記憶體需求；AdaLoRA（自適應秩分配）、LoRA+、DoRA 等變體相繼提出，持續推進參數高效微調的邊界。</p>
+        <span class="tl-tag">持續創新</span>
+      </div>
+    </div>
+  </div>
+</section>
+<hr class="hr"/>
+
+<!-- ══════════════════════════════ INSIGHTS ══════════════════════════════ -->
+<section id="insights">
+  <div class="container">
+    <div class="reveal">
+      <div class="section-label">08 — 深層洞見</div>
+      <h2>低秩矩陣<br><strong>學到了什麼？</strong></h2>
+      <p class="lead">論文第 6–7 章透過數學分析揭示了 LoRA 真正運作的本質，遠不只是參數壓縮。</p>
+    </div>
+    <div class="insight-grid">
+      <div class="insight-card reveal" data-num="I">
+        <h3>最佳秩 <em>r</em> 的奇效</h3>
+        <p>在許多下游任務中，<strong style="color:var(--light)">秩 r = 1 或 r = 2 就已足夠</strong>，與 r = 64 的效能幾乎相當。r = 8 與 r = 64 所學到的「最重要頂部特徵方向」高度重疊——多餘的 r 只是在學習累積的隨機雜訊。</p>
+        <div class="rank-bar-wrap" style="margin-top:28px">
+          <div class="rank-label"><span>r = 1</span><span>88.2</span></div>
+          <div class="rank-bar"><div class="rank-bar-fill" id="bar1" style="width:0%"></div></div>
+        </div>
+        <div class="rank-bar-wrap" style="margin-top:14px">
+          <div class="rank-label"><span>r = 4</span><span>89.8</span></div>
+          <div class="rank-bar"><div class="rank-bar-fill" id="bar4" style="width:0%"></div></div>
+        </div>
+        <div class="rank-bar-wrap" style="margin-top:14px">
+          <div class="rank-label"><span>r = 64</span><span>90.1</span></div>
+          <div class="rank-bar"><div class="rank-bar-fill" id="bar64" style="width:0%"></div></div>
+        </div>
+      </div>
+      <div class="insight-card reveal reveal-delay-2" data-num="II">
+        <h3><em>特徵放大</em>效應</h3>
+        <p>ΔW 並非在模型中學習全新的隨機知識方向，而是找出了預訓練權重 W 中「已經學會、但針對當前任務尚未被充分強調」的特徵方向，並將其大幅度放大。</p>
+        <p style="margin-top:12px">在 r = 4 的實驗中，特定任務相關特徵被放大了超過 <strong style="color:var(--gold)">21.5 倍</strong>。它不是在學習新知識，而是在「調焦」。</p>
+      </div>
+      <div class="insight-card reveal reveal-delay-1" data-num="III">
+        <h3>應該適應<em>哪些</em>矩陣？</h3>
+        <p>給定相同的參數預算（18M），<strong style="color:var(--light)">同時適應查詢矩陣 W_q 與鍵值矩陣 W_v</strong>，明顯優於將所有預算只集中在單一矩陣。廣泛覆蓋多個權重矩陣，比深入單點更加重要。</p>
+      </div>
+      <div class="insight-card reveal reveal-delay-3" data-num="IV">
+        <h3>切換任務的<em>極致靈活</em></h3>
+        <p>每個任務對應的 ΔW 模組可能只有幾 MB，切換任務時只需抽換這兩個小矩陣。以 GPT-3 175B 為例，實現了「一個基礎模型，無限任務版本」的工業化部署範式。</p>
+      </div>
+    </div>
+  </div>
+</section>
+<hr class="hr"/>
+
+<!-- ══════════════════════════════ APPLICATIONS ══════════════════════════════ -->
+<section id="applications">
+  <div class="container">
+    <div class="reveal">
+      <div class="section-label">09 — 常見應用</div>
+      <h2>從研究到<br><strong>工業落地</strong></h2>
+    </div>
+    <div class="app-grid reveal">
+      <div class="app-card"><span class="app-icon">🗣️</span><h3>語言模型微調</h3><p>GPT、LLaMA、Mistral 等 LLM 的領域客製化，如法律、醫療、客服場景。</p></div>
+      <div class="app-card"><span class="app-icon">🎨</span><h3>圖像生成</h3><p>Stable Diffusion LoRA：以極少量圖片訓練特定風格、人物或物件的生成模型。</p></div>
+      <div class="app-card"><span class="app-icon">💬</span><h3>對話系統</h3><p>將通用 LLM 微調為特定角色或專業助理，維持原始能力同時注入新知識。</p></div>
+      <div class="app-card"><span class="app-icon">🔬</span><h3>科學研究</h3><p>蛋白質結構預測、藥物分子設計等需要基礎模型快速適應特定領域資料集的任務。</p></div>
+    </div>
+  </div>
+</section>
+<hr class="hr"/>
+
+<!-- ══════════════════════════════ REFERENCES ══════════════════════════════ -->
+<section id="references">
+  <div class="container">
+    <div class="reveal">
+      <div class="section-label">10 — 參考文獻與延伸閱讀</div>
+      <h2>深入探索<br><strong>相關資源</strong></h2>
+    </div>
+    <div class="ref-grid reveal">
+      <a class="ref-card" href="https://arxiv.org/abs/2106.09685" target="_blank">
+        <div class="ref-num">01</div>
+        <div class="ref-body">
+          <div class="ref-title">LoRA: Low-Rank Adaptation of Large Language Models</div>
+          <div class="ref-authors">Hu, E., Shen, Y., Wallis, P., et al.</div>
+          <div class="ref-venue">ICLR 2022 · arXiv:2106.09685</div>
+        </div>
+      </a>
+      <a class="ref-card" href="https://arxiv.org/abs/2305.14314" target="_blank">
+        <div class="ref-num">02</div>
+        <div class="ref-body">
+          <div class="ref-title">QLoRA: Efficient Finetuning of Quantized LLMs</div>
+          <div class="ref-authors">Dettmers, T., Pagnoni, A., Holtzman, A., Zettlemoyer, L.</div>
+          <div class="ref-venue">NeurIPS 2023 · arXiv:2305.14314</div>
+        </div>
+      </a>
+      <a class="ref-card" href="https://arxiv.org/abs/2303.15647" target="_blank">
+        <div class="ref-num">03</div>
+        <div class="ref-body">
+          <div class="ref-title">AdaLoRA: Adaptive Budget Allocation for Parameter-Efficient Fine-Tuning</div>
+          <div class="ref-authors">Zhang, Q., Chen, M., Bukharin, A., et al.</div>
+          <div class="ref-venue">ICLR 2023 · arXiv:2303.15647</div>
+        </div>
+      </a>
+      <a class="ref-card" href="https://huggingface.co/docs/peft" target="_blank">
+        <div class="ref-num">04</div>
+        <div class="ref-body">
+          <div class="ref-title">PEFT: Parameter-Efficient Fine-Tuning</div>
+          <div class="ref-authors">HuggingFace Team</div>
+          <div class="ref-venue">官方文件 · huggingface.co/docs/peft</div>
+        </div>
+      </a>
+      <a class="ref-card" href="https://arxiv.org/abs/1706.03762" target="_blank">
+        <div class="ref-num">05</div>
+        <div class="ref-body">
+          <div class="ref-title">Attention Is All You Need</div>
+          <div class="ref-authors">Vaswani, A., Shazeer, N., Parmar, N., et al.</div>
+          <div class="ref-venue">NeurIPS 2017 · arXiv:1706.03762</div>
+        </div>
+      </a>
+      <a class="ref-card" href="https://arxiv.org/abs/2402.09353" target="_blank">
+        <div class="ref-num">06</div>
+        <div class="ref-body">
+          <div class="ref-title">DoRA: Weight-Decomposed Low-Rank Adaptation</div>
+          <div class="ref-authors">Liu, S., Wang, C., Yin, H., et al.</div>
+          <div class="ref-venue">ICML 2024 · arXiv:2402.09353</div>
+        </div>
+      </a>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════════════════════ FOOTER ══════════════════════════════ -->
+<footer>
+  <div class="container">
+    <div class="footer-inner">
+      <div>
+        <div class="footer-logo">Lo<em>RA</em></div>
+        <p style="font-family:'DM Mono',monospace;font-size:.6rem;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin-top:8px">Low-Rank Adaptation of Large Language Models</p>
+      </div>
+      <div class="footer-copy">
+        <p>Hu et al., Microsoft Research, 2021</p>
+        <p style="margin-top:6px"><a href="https://arxiv.org/abs/2106.09685" target="_blank">arXiv:2106.09685</a></p>
+        <p style="margin-top:6px;color:var(--border)">ICLR 2022</p>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<script>
+// ── SPLASH ──
+window.addEventListener('load', () => {
+  setTimeout(() => {
+    document.getElementById('splash').classList.add('hidden');
+  }, 2400);
+});
+
+// ── Cursor ──
+const dot = document.getElementById('cursorDot');
+const ring = document.getElementById('cursorRing');
+let mx=0,my=0,rx=0,ry=0;
+document.addEventListener('mousemove', e => { mx=e.clientX; my=e.clientY; });
+function animCursor(){
+  dot.style.left=mx+'px'; dot.style.top=my+'px';
+  rx+=(mx-rx)*.12; ry+=(my-ry)*.12;
+  ring.style.left=rx+'px'; ring.style.top=ry+'px';
+  requestAnimationFrame(animCursor);
+}
+animCursor();
+document.querySelectorAll('a,button,.step-card,.stat-card,.insight-card,.app-card,.ref-card,.tl-item').forEach(el=>{
+  el.addEventListener('mouseenter',()=>{ ring.style.width='52px'; ring.style.height='52px'; ring.style.borderColor='rgba(200,169,110,.9)'; });
+  el.addEventListener('mouseleave',()=>{ ring.style.width='32px'; ring.style.height='32px'; ring.style.borderColor='rgba(200,169,110,.4)'; });
+});
+
+// ── Parallax hero grid ──
+document.addEventListener('mousemove', e => {
+  const x = (e.clientX/window.innerWidth - .5) * 20;
+  const y = (e.clientY/window.innerHeight - .5) * 20;
+  const grid = document.getElementById('heroGrid');
+  if(grid) grid.style.transform = `translate(${x}px,${y}px)`;
+});
+
+// ── Author card ──
+const authorCard = document.getElementById('authorCard');
+const nav = document.getElementById('nav');
+let lastScroll=0;
+window.addEventListener('scroll',()=>{
+  const y = window.scrollY;
+  if(y>80 && y>lastScroll){ authorCard.classList.add('hidden'); }
+  else if(y<lastScroll||y<80){ authorCard.classList.remove('hidden'); }
+  lastScroll=y;
+  nav.classList.toggle('scrolled', y>60);
+  nav.style.top = authorCard.classList.contains('hidden') ? '0' : '61px';
+  // back to top
+  document.getElementById('back-top').classList.toggle('visible', y>400);
+  // progress nav visible after hero
+  document.getElementById('progress-nav').classList.toggle('visible', y>200);
+});
+
+// ── Back to top ──
+document.getElementById('back-top').addEventListener('click',()=>{ window.scrollTo({top:0,behavior:'smooth'}); });
+
+// ── Section progress nav ──
+const sections = ['hero','what','mechanism','results','chart-section','code-section','timeline-section','insights','applications','references'];
+const pDots = document.querySelectorAll('.pnav-dot');
+pDots.forEach((dot,i)=>{
+  dot.addEventListener('click',()=>{
+    const el = document.getElementById(sections[i]);
+    if(el) el.scrollIntoView({behavior:'smooth'});
+  });
+});
+const ioProgress = new IntersectionObserver(entries=>{
+  entries.forEach(e=>{
+    if(e.isIntersecting){
+      const idx = sections.indexOf(e.target.id);
+      pDots.forEach(d=>d.classList.remove('active'));
+      if(idx>=0) pDots[idx].classList.add('active');
+    }
+  });
+},{threshold:.4});
+sections.forEach(id=>{ const el=document.getElementById(id); if(el) ioProgress.observe(el); });
+
+// ── Reveal ──
+const observer = new IntersectionObserver(entries=>{
+  entries.forEach(e=>{
+    if(e.isIntersecting){
+      e.target.classList.add('visible');
+      if(e.target.querySelector && e.target.querySelector('#bar1')){
+        setTimeout(()=>{
+          document.getElementById('bar1').style.width='88%';
+          document.getElementById('bar4').style.width='91%';
+          document.getElementById('bar64').style.width='92%';
+        },300);
+      }
+    }
+  });
+},{threshold:.1});
+document.querySelectorAll('.reveal').forEach(el=>observer.observe(el));
+
+// ── Matrix ──
+function buildMatrix(id,rows,cols,type){
+  const el=document.getElementById(id); if(!el) return;
+  for(let r=0;r<rows;r++){
+    const row=document.createElement('div'); row.className='matrix-row';
+    for(let c=0;c<cols;c++){
+      const cell=document.createElement('div'); cell.className='cell';
+      if(type==='frozen') cell.classList.add('frozen');
+      else if(type==='lora') cell.classList.add(Math.random()>.5?'active':'low-rank');
+      else if(type==='result') cell.classList.add(Math.random()>.6?'active':'frozen');
+      row.appendChild(cell);
+    }
+    el.appendChild(row);
+  }
+}
+buildMatrix('matW0',8,8,'frozen');
+buildMatrix('matB',8,2,'lora');
+buildMatrix('matA',2,8,'lora');
+buildMatrix('matResult',8,8,'result');
+setInterval(()=>{ document.querySelectorAll('.cell.active,.cell.low-rank').forEach(c=>{ c.style.opacity=(.4+Math.random()*.55).toFixed(2); }); },1200);
+
+// ── Interactive Chart ──
+const chartData = {
+  sst2:  { labels:['Full FT','BitFit','Adapter','Prefix','LoRA'], scores:[95.2,90.8,94.3,92.1,95.1] },
+  mnli:  { labels:['Full FT','BitFit','Adapter','Prefix','LoRA'], scores:[90.2,83.5,88.9,85.2,90.7] },
+  qnli:  { labels:['Full FT','BitFit','Adapter','Prefix','LoRA'], scores:[94.7,89.2,93.8,90.4,94.9] },
+  qqp:   { labels:['Full FT','BitFit','Adapter','Prefix','LoRA'], scores:[91.8,86.7,90.5,88.0,91.6] },
+  mrpc:  { labels:['Full FT','BitFit','Adapter','Prefix','LoRA'], scores:[90.0,85.0,88.5,86.2,90.2] },
+};
+function renderChart(key){
+  const data = chartData[key];
+  const barsEl = document.getElementById('chartBars');
+  const ylEl = document.getElementById('chartYLines');
+  barsEl.innerHTML=''; ylEl.innerHTML='';
+  const min=75, max=100;
+  // y lines
+  [80,85,90,95,100].forEach(v=>{
+    const pct = (v-min)/(max-min)*100;
+    const line = document.createElement('div');
+    line.className='chart-y-line';
+    line.style.bottom = pct+'%';
+    line.innerHTML = '<span>'+v+'</span>';
+    ylEl.appendChild(line);
+  });
+  data.labels.forEach((label,i)=>{
+    const isLora = label==='LoRA';
+    const pct = (data.scores[i]-min)/(max-min)*100;
+    const grp = document.createElement('div'); grp.className='chart-bar-group';
+    const bar = document.createElement('div');
+    bar.className = 'chart-bar '+(isLora?'lora-bar':'other-bar');
+    bar.style.height='2px';
+    bar.innerHTML = `<div class="tooltip">${label}: ${data.scores[i]}</div>`;
+    const xlbl = document.createElement('div'); xlbl.className='chart-x-label'; xlbl.textContent=label;
+    grp.appendChild(bar); grp.appendChild(xlbl);
+    barsEl.appendChild(grp);
+    requestAnimationFrame(()=>{ setTimeout(()=>{ bar.style.height=(pct*2.4)+'px'; },50+i*80); });
+  });
+}
+renderChart('sst2');
+document.getElementById('chartControls').addEventListener('click',e=>{
+  if(e.target.classList.contains('chart-btn')){
+    document.querySelectorAll('.chart-btn').forEach(b=>b.classList.remove('active'));
+    e.target.classList.add('active');
+    renderChart(e.target.dataset.chart);
+  }
+});
+
+// ── Code tabs ──
+document.querySelectorAll('.code-tab').forEach(tab=>{
+  tab.addEventListener('click',()=>{
+    document.querySelectorAll('.code-tab').forEach(t=>t.classList.remove('active'));
+    document.querySelectorAll('.code-panel').forEach(p=>p.classList.remove('active'));
+    tab.classList.add('active');
+    document.getElementById('tab-'+tab.dataset.tab).classList.add('active');
+  });
+});
+function copyCode(panelId){
+  const text = document.getElementById(panelId).querySelector('pre').innerText;
+  navigator.clipboard.writeText(text).then(()=>{
+    const btn = document.querySelector('#'+panelId+' .copy-btn');
+    const orig = btn.textContent;
+    btn.textContent='Copied!'; btn.style.color='var(--gold)';
+    setTimeout(()=>{ btn.textContent=orig; btn.style.color=''; },2000);
+  });
+}
+</script>
+</body>
+</html>
